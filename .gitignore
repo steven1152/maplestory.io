@@ -237,3 +237,5 @@ maplestory.io/appsettings.Development.json
 
 .vscode/
 .idea/
+
+maplestory.io/wwwroot/Design/*

@@ -13,6 +13,7 @@ using Microsoft.Extensions.Configuration.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
 using Swashbuckle.AspNetCore.Swagger;
 using System;
 using System.IdentityModel.Tokens.Jwt;
@@ -56,13 +57,18 @@ namespace maplestory.io
             services.AddOptions();
             services.AddResponseCompression();
 
+            services.AddRazorPages().AddRazorRuntimeCompilation();
+
+            services.AddApplicationInsightsTelemetry();
+
             // Add framework services.
             services.AddMvc()
-                .AddJsonOptions(options => {
+                .AddNewtonsoftJson(options =>
+                {
                     options.SerializerSettings.Formatting = Newtonsoft.Json.Formatting.Indented;
                     options.SerializerSettings.NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore;
-                })
-                .AddJsonOptions(options => options.SerializerSettings.Converters.Add(new ImageConverter()));
+                    options.SerializerSettings.Converters.Add(new ImageConverter());
+                });
 
             services.AddCors();
 
@@ -112,24 +118,17 @@ namespace maplestory.io
 
             services.AddSwaggerGen(c =>
             {
-                c.SwaggerDoc("V2", new Info { Title = "MapleStory.IO", Version = "V2", Contact = new Contact() { Email = "andy@crr.io", Name = "Andy", Url = "https://github.com/crrio/maplestory.io" }, Description = "The unofficial MapleStory API Documentation for developers." });
+                c.SwaggerDoc("V2", new OpenApiInfo { Title = "MapleStory.IO", Version = "V2", Contact = new OpenApiContact() { Email = "andy@crr.io", Name = "Andy", Url = new Uri("https://github.com/crrio/maplestory.io") }, Description = "The unofficial MapleStory API Documentation for developers." });
             });
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
         public void Configure(IApplicationBuilder app, IHostingEnvironment env, ILoggerFactory loggerFactory)
         {
-            if (Configuration.GetChildren().FirstOrDefault(c => c.Key == "Logging") != null)
-                loggerFactory.AddConsole(Configuration.GetSection("Logging"));
-            else if (Environment.GetEnvironmentVariable("LOG_LEVEL") != null)
-                loggerFactory.AddConsole(Enum.TryParse(typeof(LogLevel), Environment.GetEnvironmentVariable("LOG_LEVEL"), out object level) ? (LogLevel)level : LogLevel.Information);
-            else
-                loggerFactory.AddConsole();
 
             ILogger logging = loggerFactory.CreateLogger<Startup>();
 
             app.UseResponseCompression();
-            app.UseResponseBuffering();
             app.UseCors(builder => builder.AllowAnyOrigin().AllowAnyMethod());
             app.Use((ctx, next) =>
             {
@@ -147,25 +146,28 @@ namespace maplestory.io
 
             if (env.IsDevelopment())
             {
-                loggerFactory.AddDebug(LogLevel.Debug);
                 app.UseDeveloperExceptionPage();
                 app.UseBrowserLink();
             }
             else
             {
-                loggerFactory.AddDebug(LogLevel.Debug);
                 app.UseExceptionHandler("/Home/Error");
             }
 
+            app.UseDefaultFiles();
             app.UseStaticFiles();
 
             // ===== Use Authentication ======
             app.UseAuthentication();
-            app.UseMvc(routes =>
+
+            app.UseRouting();
+
+            app.UseAuthorization();
+
+            app.UseEndpoints(endpoints =>
             {
-                routes.MapRoute(
-                    name: "default",
-                    template: "{controller=Home}/{action=Index}/{id?}");
+                endpoints.MapRazorPages();
+                endpoints.MapControllerRoute("default", "{controller=Home}/{action=Index}/{id?}");
             });
 
             // Enable middleware to serve generated Swagger as a JSON endpoint.

@@ -20,7 +20,7 @@ namespace maplestory.io
 
             Stopwatch watch = Stopwatch.StartNew();
 
-            ILoggerFactory logging = (new LoggerFactory()).AddConsole(LogLevel.Trace);
+            ILoggerFactory logging = LoggerFactory.Create(builder => builder.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace));
             ILogger<Package> packageLogger = logging.CreateLogger<Package>();
             ILogger<PackageCollection> packageCollectionLogger = logging.CreateLogger<PackageCollection>();
             ILogger<VersionGuesser> versionGuesserLogger = logging.CreateLogger<VersionGuesser>();
@@ -85,7 +85,6 @@ namespace maplestory.io
                 .UseContentRoot(Directory.GetCurrentDirectory())
                 .UseUrls("http://*:5000")
                 .UseStartup<Startup>()
-                .UseApplicationInsights()
                 .Build();
 
             host.Run();
