@@ -1,6 +1,7 @@
 ﻿using maplestory.io.Entities.Models;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using PKG1;
 using System;
 
 namespace maplestory.io.Entities
@@ -27,6 +28,16 @@ namespace maplestory.io.Entities
                    $"uid={databaseUser};" +
                    $"pwd={databasePass};" +
                    $"pooling=true;Allow User Variables=True";
+        }
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder
+                .Entity<MapleVersion>()
+                .Property(e => e.Region)
+                .HasConversion(
+                    v => (int)v,
+                    v => (Region)v);
         }
     }
 }

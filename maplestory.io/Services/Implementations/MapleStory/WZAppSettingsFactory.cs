@@ -11,6 +11,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore.Internal;
+using maplestory.io.Entities.Models;
 
 namespace maplestory.io.Services.Implementations.MapleStory
 {
@@ -24,61 +25,74 @@ namespace maplestory.io.Services.Implementations.MapleStory
         static ConcurrentDictionary<string, EventWaitHandle> wzLoading = new ConcurrentDictionary<string, EventWaitHandle>();
         static ConcurrentDictionary<Region, ConcurrentDictionary<string, MSPackageCollection>> cache = new ConcurrentDictionary<Region, ConcurrentDictionary<string, MSPackageCollection>>();
 
+        public IEnumerable<MapleVersion> Versions => _config.versions;
+
         // Settings Factories
         public WZAppSettingsFactory(IOptions<WZOptions> config) : this(config.Value) { }
         public WZAppSettingsFactory(WZOptions config) => this._config = config;
 
         public MSPackageCollection GetWZ(Region region, string version)
         {
-            // Check the configuration to see if a version is specified.
-            if (version == null)
-            {
-                // Use the latest version
-                version = "latest";
-            }
+            // Make sure that we have a version.
+            if (version == null) version = "latest";
+
+            // Trim the versions tring.
+            version = version.TrimStart('0');
 
             EventWaitHandle wait = new EventWaitHandle(false, EventResetMode.ManualReset);
             string versionHash = $"{region.ToString()}-{version}";
 
-            // Check to see if the cache contains the region
-            if (!cache.ContainsKey(region))
-            {
-                cache.TryAdd(region, new ConcurrentDictionary<string, MSPackageCollection>());
-            }
+            if (!cache.ContainsKey(region)) cache.TryAdd(region, new ConcurrentDictionary<string, MSPackageCollection>());
             else if (cache[region].ContainsKey(version))
-            {
                 return cache[region][version];
-            }
-                
-            // Try to add the version to the cache.
+
             if (!wzLoading.TryAdd(versionHash, wait))
             {
                 Logger.LogInformation($"Waiting for other thread to finish loading {region} - {version}");
                 wzLoading[versionHash].WaitOne();
                 Logger.LogInformation($"Finished waiting for {region} - {version}");
-
-                // Check to see if the cache contains the region and version.
                 if (cache.ContainsKey(region) && cache[region].ContainsKey(version))
-                {
                     return GetWZ(region, version);
-                }
-                    
                 else throw new KeyNotFoundException("That version or region could not be found");
             }
 
-            // If there's no version, default to latest.
-            // TODO(acornwall): Verify that this is correct behavior.
-            var maybeVersion = _config.versions.Where(c => c.region == region && c.version == version);
-            WZVersion wzVersion = maybeVersion.FirstOr(_config.versions.First(c => c.region == region && c.version == "latest"));
-            MSPackageCollection collection = new MSPackageCollection(wzVersion.path, ushort.TryParse(wzVersion.version, out ushort ver) ? (ushort?) ver : null, wzVersion.region);
+            // Placeholder variable.
+            MapleVersion mapleVersion = null;
 
+            if (version == "latest")
+            {
+                mapleVersion = _config.versions.LastOrDefault(c => c.Region == region);
+            }
+            else
+            {
+                mapleVersion = _config.versions.FirstOrDefault(c => c.Region == region && c.MapleVersionId == version);
+            }
+
+            if (mapleVersion == null)
+            {
+                wait.Set();
+                throw new KeyNotFoundException("That version or region could not be found");
+            }
+
+            MSPackageCollection collection = new MSPackageCollection(mapleVersion, null, region);
             Logger.LogInformation($"Finished loading {region} - {version}");
             if (cache[region].TryAdd(version, collection) && cache[region].ContainsKey("latest"))
             {
                 wait.Set();
+                if (mapleVersion.Id > cache[region]["latest"].MapleVersion.Id)
+                {
+                    // Update the latest pointer if this is newer than the old latest
+                    cache[region]["latest"] = collection;
+                }
+
+                // Return the new collection.
                 return collection;
             }
-            else return cache[region][version];
+            else
+            {
+                // Already exists, return the cached value.
+                return cache[region][version];
+            }
         }
     }
 }

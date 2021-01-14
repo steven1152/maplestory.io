@@ -18,9 +18,11 @@
   "WZ": {
     "versions": [
       {
-        "path": "C:\\Nexon\\Library\\maplestory\\appdata\\Base.wz",
-        "version": "latest",
-        "region": 0
+        "Location": "C:\\Nexon\\Library\\maplestory\\appdata\\Base.wz",
+        "BaseFile": "Base",
+        "MapleVersionId": "latest",
+        "Region": 0,
+        "isReady": true
       }
     ]
   }

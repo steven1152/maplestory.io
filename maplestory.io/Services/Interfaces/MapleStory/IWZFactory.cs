@@ -4,12 +4,15 @@ using System.Linq;
 using System.Threading.Tasks;
 using PKG1;
 using maplestory.io.Models;
+using maplestory.io.Entities.Models;
 
 namespace maplestory.io.Services.Interfaces.MapleStory
 {
     public interface IWZFactory
     {
         MSPackageCollection GetWZ(Region region, string version);
+
+        IEnumerable<MapleVersion> Versions { get; }
     }
 
     public enum WZ {

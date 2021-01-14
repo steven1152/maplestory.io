@@ -38,7 +38,7 @@ namespace maplestory.io.Controllers
 
         [Route("")]
         [HttpGet]
-        public IActionResult Index([FromServices]ApplicationDbContext _ctx) => Json(_ctx.MapleVersions.ToArray(), serializerSettings);
+        public IActionResult Index() => Json(_wzFactory.Versions, serializerSettings);
 
         [Route("{region}/{version}/{*path}")]
         [HttpGet]

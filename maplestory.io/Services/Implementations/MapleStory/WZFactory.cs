@@ -64,6 +64,8 @@ namespace maplestory.io.Services.Implementations.MapleStory
         /// </summary>
         static ConcurrentDictionary<Region, ConcurrentDictionary<string, MSPackageCollection>> cache = new ConcurrentDictionary<Region, ConcurrentDictionary<string, MSPackageCollection>>();
 
+        public IEnumerable<MapleVersion> Versions => _dbContext.MapleVersions.ToArray();
+
         /// <summary>
         /// Get WZ File.
         /// </summary>
@@ -74,9 +76,6 @@ namespace maplestory.io.Services.Implementations.MapleStory
         {
             // Make sure that we have a version.
             if (version == null) version = "latest";
-
-            // Get the region number
-            int regionNum = (int)region;
 
             // Trim the versions tring.
             version = version.TrimStart('0');
@@ -103,11 +102,11 @@ namespace maplestory.io.Services.Implementations.MapleStory
 
             if (version == "latest")
             {
-                mapleVersion = _dbContext.MapleVersions.LastOrDefault(c => c.Region == regionNum);
+                mapleVersion = _dbContext.MapleVersions.LastOrDefault(c => c.Region == region);
             }
             else
             {
-                mapleVersion = _dbContext.MapleVersions.FirstOrDefault(c => c.Region == regionNum && c.MapleVersionId == version);
+                mapleVersion = _dbContext.MapleVersions.FirstOrDefault(c => c.Region == region && c.MapleVersionId == version);
             }
 
             if (mapleVersion == null)
