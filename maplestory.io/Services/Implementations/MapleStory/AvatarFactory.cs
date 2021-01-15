@@ -31,9 +31,10 @@ using SixLabors.Shapes;
 
 namespace maplestory.io.Services.Implementations.MapleStory
 {
-    public class AvatarFactory : IAvatarFactory
+    public class AvatarFactory : IAvatarFactory, IDisposable
     {
         public string[] RequiresFace = new string[] { "face", "capeOverHead", "accessoryEye" };
+        private List<Image<Rgba32>> pendingDispose = new List<Image<Rgba32>>();
 
         public static readonly FontCollection fonts;
         static AvatarFactory()
@@ -490,8 +491,9 @@ namespace maplestory.io.Services.Implementations.MapleStory
                 });
             }).ToDictionary(c => c.Key, c => c.Value);
 
-            List<Func<Tuple<string, byte[]>>> allImages = new List<Func<Tuple<string, byte[]>>>();
+            List<Func<Tuple<string, byte[], Dictionary<string, Point>>>> allImages = new List<Func<Tuple<string, byte[], Dictionary<string, Point>>>>();
             bool isMinimal = (format & SpriteSheetFormat.Minimal) == SpriteSheetFormat.Minimal;
+            bool aligned = format == SpriteSheetFormat.Plain || format == SpriteSheetFormat.Minimal;
 
             foreach (string emotion in isMinimal ? new[] { "default" } : face?.FrameBooks?.Keys?.ToArray() ?? new[] { "default" })
             {
@@ -500,7 +502,7 @@ namespace maplestory.io.Services.Implementations.MapleStory
                 {
                     foreach (KeyValuePair<string, int> animation in actions)
                     {
-                        foreach (int frame in Enumerable.Range(0, animation.Value + 1))
+                        foreach (int frame in Enumerable.Range(0, animation.Value))
                         {
                             if (watch.ElapsedMilliseconds > 120000) return null;
                             allImages.Add(() => {
@@ -518,16 +520,18 @@ namespace maplestory.io.Services.Implementations.MapleStory
                                 }, c => c.Value);
 
                                 byte[] data = null;
+                                Dictionary<string, Point> anchorPositions = new Dictionary<string, Point>();
                                 if ((format & SpriteSheetFormat.PDNZip) == SpriteSheetFormat.PDNZip)
                                     data = RenderFrameZip(request, character.Mode, animation.Key, character.Name, frame, character.ElfEars, character.LefEars, character.HighLefEars, character.FlipX, character.Zoom, character.Padding, null, hasChair, hasMount, chairSitAction, weaponType, realResolved, exclusiveLocks, zmap, smap);
                                 else if ((format & SpriteSheetFormat.Aseprite) == SpriteSheetFormat.Aseprite)
                                     data = RenderAsepriteFrame(character.Mode, animation.Key, character.Name, frame, character.ElfEars, character.LefEars, character.HighLefEars, character.FlipX, character.Zoom, character.Padding, null, hasChair, hasMount, chairSitAction, weaponType, realResolved, exclusiveLocks, zmap, smap);
                                 else
-                                    data = RenderFrame(character.Mode, animation.Key, character.Name, frame, character.ElfEars, character.LefEars, character.HighLefEars, character.FlipX, character.Zoom, character.Padding, null, hasChair, hasMount, chairSitAction, weaponType, realResolved, exclusiveLocks, zmap, smap).ImageToByte(request, false);
+                                    data = RenderFrame(character.Mode, animation.Key, character.Name, frame, character.ElfEars, character.LefEars, character.HighLefEars, character.FlipX, character.Zoom, character.Padding, anchorPositions, hasChair, hasMount, chairSitAction, weaponType, realResolved, exclusiveLocks, zmap, smap, false).ImageToByte(request, false);
 
-                                var res = new Tuple<string, byte[]>(
+                                var res = new Tuple<string, byte[], Dictionary<string, Point>>(
                                     path,
-                                    data
+                                    data,
+                                    anchorPositions
                                 );
                                 return res;
                             });
@@ -536,51 +540,116 @@ namespace maplestory.io.Services.Implementations.MapleStory
                 }
             }
 
-            if (isMinimal && face != null)
-            {
-                foreach (string emotion in face?.FrameBooks?.Keys?.ToArray() ?? new[] { "default" })
-                {
-                    int frameNumber = 0;
-                    foreach (EquipFrame frame in face?.FrameBooks[emotion]?.frames)
-                    {
-                        foreach (KeyValuePair<string, Frame> framePart in frame.Effects)
-                        {
-                            int iFrameNumber = frameNumber;
-                            allImages.Add(() => {
-                                byte[] bytes = framePart.Value.Image.ImageToByte(request, false);
-                                string path = $"faces/{emotion}_{iFrameNumber}_{framePart.Key}.png";
-                                return new Tuple<string, byte[]>(path, bytes);
-                            });
-                        }
-                        ++frameNumber;
-                    }
-                }
-            }
-
             using (MemoryStream mem = new MemoryStream())
             {
                 using (ZipArchive archive = new ZipArchive(mem, ZipArchiveMode.Create, true))
                 {
-                    ConcurrentBag<Tuple<string, byte[]>> bag = new ConcurrentBag<Tuple<string, byte[]>>();
+                    ConcurrentBag<Tuple<string, byte[], Dictionary<string, Point>>> bag = new ConcurrentBag<Tuple<string, byte[], Dictionary<string, Point>>>();
                     Parallel.ForEach(allImages, (a) => {
                         var b = a();
                         if (b == null) return;
-                        bag.Add(new Tuple<string, byte[]>(b.Item1, b.Item2));
+                        bag.Add(new Tuple<string, byte[], Dictionary<string, Point>>(b.Item1, b.Item2, b.Item3));
                     });
 
-                    foreach (Tuple<string, byte[]> frameData in bag)
+                    void AddEntry(string name, byte[] bytes)
                     {
-                        ZipArchiveEntry entry = archive.CreateEntry(frameData.Item1, CompressionLevel.Optimal);
+                        ZipArchiveEntry entry = archive.CreateEntry(name, CompressionLevel.Optimal);
                         using (Stream entryData = entry.Open())
                         {
-                            entryData.Write(frameData.Item2, 0, frameData.Item2.Length);
+                            entryData.Write(bytes, 0, bytes.Length);
                             entryData.Flush();
+                        }
+                    }
+
+                    if (aligned)
+                    {
+                        foreach (var animationKey in bag.GroupBy(f => f.Item1.Split("_")[0]))
+                        {
+                            List<Tuple<Image<Rgba32>, Dictionary<string, Point>>> frames = new List<Tuple<Image<Rgba32>, Dictionary<string, Point>>>();
+                            foreach (var animationFrame in animationKey.OrderBy(f => f.Item1))
+                            {
+                                var image = Image.Load(animationFrame.Item2);
+                                pendingDispose.Add(image);
+                                frames.Add(new Tuple<Image<Rgba32>, Dictionary<string, Point>>(image, animationFrame.Item3));
+                            }
+                            var images = AlignFrames(animationKey.Key.Split('/').Last(), frames.ToArray());
+                            for (int i = 0; i < images.Count; i++)
+                            {
+                                string name = $"{animationKey.Key}_{i}.png";
+                                var bytes = images[i].ImageToByte(request, false);
+                                AddEntry(name, bytes);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        foreach (Tuple<string, byte[], Dictionary<string, Point>> frameData in bag)
+                        {
+                            AddEntry(frameData.Item1, frameData.Item2);
                         }
                     }
                 }
 
                 return mem.ToArray();
             }
+        }
+
+        private List<Image<Rgba32>> AlignFrames(string animationName, Tuple<Image<Rgba32>, Dictionary<string, Point>>[] frames, Rgba32? background = null)
+        {
+            // Idle positions 
+            if (animationName.Equals("alert", StringComparison.CurrentCultureIgnoreCase) || animationName.StartsWith("stand", StringComparison.CurrentCultureIgnoreCase))
+                frames = frames.Concat(MoreEnumerable.SkipLast(frames.Reverse().Skip(1), 1)).ToArray();
+
+            int maxWidth = frames.Max(x => x.Item1.Width);
+            int maxHeight = frames.Max(x => x.Item1.Height);
+            Point maxFeetCenter = new Point(
+                frames.Select(c => c.Item2["feetCenter"].X).Max(),
+                frames.Select(c => c.Item2["feetCenter"].Y).Max()
+            );
+            Point maxDifference = new Point(
+                maxFeetCenter.X - frames.Select(c => c.Item2["feetCenter"].X).Min(),
+                maxFeetCenter.Y - frames.Select(c => c.Item2["feetCenter"].Y).Min()
+            );
+
+            var images = new List<Image<Rgba32>>();
+            var width = maxWidth + maxDifference.X;
+            var height = maxHeight + maxDifference.Y;
+
+            for (int i = 0; i < frames.Length; ++i)
+            {
+                Image<Rgba32> frameImage = frames[i].Item1;
+                Point feetCenter = frames[i].Item2["feetCenter"];
+                Point offset = new Point(maxFeetCenter.X - feetCenter.X, maxFeetCenter.Y - feetCenter.Y);
+
+                if (offset.X != 0 || offset.Y != 0)
+                {
+                    Image<Rgba32> offsetFrameImage = new Image<Rgba32>(width, height);
+                    offsetFrameImage.Mutate(x => x.DrawImage(frameImage, 1, offset));
+                    frameImage = offsetFrameImage;
+                }
+
+                if (frameImage.Width != width || frameImage.Height != height) frameImage.Mutate(x => x.Crop(width, height));
+
+                if (background?.A > 0)
+                {
+                    Image<Rgba32> frameWithBackground = new Image<Rgba32>(frameImage.Width, frameImage.Height);
+                    frameWithBackground.Mutate(x =>
+                    {
+                        x.Fill(background.Value);
+                        x.DrawImage(frameImage, 1, Point.Empty);
+                    });
+
+                    if (frameImage != frames[i].Item1) frameImage.Dispose();
+                    frameImage = frameWithBackground;
+                }
+
+                images.Add(frameImage);
+
+                pendingDispose.Add(frameImage);
+                if (frameImage != frames[i].Item1) pendingDispose.Add(frames[i].Item1);
+            }
+
+            return images;
         }
 
         private byte[] RenderAsepriteFrame(RenderMode mode, string key, string name, int frame, bool elfEars, bool lefEars, bool highLefEars, bool flipX, float zoom, int padding, object p, bool hasChair, bool hasMount, string chairSitAction, int weaponType, Dictionary<AvatarItemEntry, WZProperty> realResolved, Dictionary<string, int> exclusiveLocks, List<string> zmap, Dictionary<string, string> smap)
@@ -710,71 +779,27 @@ namespace maplestory.io.Services.Implementations.MapleStory
             WZProperty bodyAnimationNode = body.Value.Resolve(character.AnimationName) ?? body.Value.Resolve("default");
             int maxFrame = bodyAnimationNode.Children.Select(c => int.TryParse(c.Name, out int frameNumber) ? frameNumber : -1).Max();
 
-            Tuple<Image<Rgba32>, Dictionary<string, Point>, int>[] frames = Enumerable.Range(0, maxFrame + 1).Select(frameNumber => {
+            Tuple<Image<Rgba32>, Dictionary<string, Point>>[] frames = Enumerable.Range(0, maxFrame + 1).Select(frameNumber => {
                 Dictionary<string, Point> anchorPositions = new Dictionary<string, Point>();
-                return new Tuple<Image<Rgba32>, Dictionary<string, Point>, int>(
+                return new Tuple<Image<Rgba32>, Dictionary<string, Point>>(
                     RenderFrame(character.Mode, character.AnimationName, character.Name, frameNumber, character.ElfEars, character.LefEars, character.HighLefEars, character.FlipX, character.Zoom, character.Padding, anchorPositions, hasChair, hasMount, chairSitAction, weaponType, resolved, exclusiveLocks, zmap, smap),
-                    anchorPositions,
-                    bodyAnimationNode.ResolveFor<int>($"{frameNumber}/delay") ?? 0
+                    anchorPositions
                 );
             }).ToArray();
 
-            // Idle positions 
-            if (character.AnimationName.Equals("alert", StringComparison.CurrentCultureIgnoreCase) || character.AnimationName.StartsWith("stand", StringComparison.CurrentCultureIgnoreCase))
-                frames = frames.Concat(MoreEnumerable.SkipLast(frames.Reverse().Skip(1), 1)).ToArray();
+            var images = AlignFrames(character.AnimationName, frames, background);
 
-            int maxWidth = frames.Max(x => x.Item1.Width);
-            int maxHeight = frames.Max(x => x.Item1.Height);
-            Point maxFeetCenter = new Point(
-                frames.Select(c => c.Item2["feetCenter"].X).Max(),
-                frames.Select(c => c.Item2["feetCenter"].Y).Max()
-            );
-            Point maxDifference = new Point(
-                maxFeetCenter.X - frames.Select(c => c.Item2["feetCenter"].X).Min(),
-                maxFeetCenter.Y - frames.Select(c => c.Item2["feetCenter"].Y).Min()
-            );
+            var gif = new Image<Rgba32>(images.First().Width, images.First().Height);
 
-            List<Image<Rgba32>> pendingDispose = new List<Image<Rgba32>>();
-            var gif = new Image<Rgba32>(maxWidth + maxDifference.X, maxHeight + maxDifference.Y);
-
-            for (int i = 0; i < frames.Length; ++i)
+            for (int i = 0; i < images.Count; i++)
             {
-                Image<Rgba32> frameImage = frames[i].Item1;
-                Point feetCenter = frames[i].Item2["feetCenter"];
-                Point offset = new Point(maxFeetCenter.X - feetCenter.X, maxFeetCenter.Y - feetCenter.Y);
-
-                if (offset.X != 0 || offset.Y != 0)
-                {
-                    Image<Rgba32> offsetFrameImage = new Image<Rgba32>(gif.Width, gif.Height);
-                    offsetFrameImage.Mutate(x => x.DrawImage(frameImage, 1, offset));
-                    frameImage = offsetFrameImage;
-                }
-
-                if (frameImage.Width != gif.Width || frameImage.Height != gif.Height) frameImage.Mutate(x => x.Crop(gif.Width, gif.Height));
-
-                if (background?.A != 0)
-                {
-                    Image<Rgba32> frameWithBackground = new Image<Rgba32>(frameImage.Width, frameImage.Height);
-                    frameWithBackground.Mutate(x =>
-                    {
-                        x.Fill(background.Value);
-                        x.DrawImage(frameImage, 1, Point.Empty);
-                    });
-
-                    if (frameImage != frames[i].Item1) frameImage.Dispose();
-                    frameImage = frameWithBackground;
-                }
-
-                ImageFrame<Rgba32> resultFrame = gif.Frames.AddFrame(frameImage.Frames.RootFrame);
-                resultFrame.MetaData.FrameDelay = frames[i].Item3 / 10;
-                resultFrame.MetaData.DisposalMethod = SixLabors.ImageSharp.Formats.Gif.DisposalMethod.RestoreToBackground;
-
-                pendingDispose.Add(frameImage);
-                if (frameImage != frames[i].Item1) pendingDispose.Add(frames[i].Item1);
+                images[i].Frames.RootFrame.MetaData.FrameDelay = (bodyAnimationNode.ResolveFor<int>($"{i}/delay") ?? 0) / 10;
+                images[i].Frames.RootFrame.MetaData.DisposalMethod = SixLabors.ImageSharp.Formats.Gif.DisposalMethod.RestoreToBackground;
+                gif.Frames.AddFrame(images[i].Frames.RootFrame);
             }
-            gif.Frames.RemoveFrame(0);
 
-            pendingDispose.ForEach(c => c.Dispose());
+
+            gif.Frames.RemoveFrame(0);
 
             return gif;
         }
@@ -787,7 +812,7 @@ namespace maplestory.io.Services.Implementations.MapleStory
             return RenderFrame(character.Mode, character.AnimationName, character.Name, character.FrameNumber, character.ElfEars, character.LefEars, character.HighLefEars, character.FlipX, character.Zoom, character.Padding, anchorPositions, hasChair, hasMount, chairSitAction, weaponType, resolved, exclusiveLocks, zmap, smap);
         }
 
-        private Image<Rgba32> RenderFrame(RenderMode mode, string animationName, string name, int frameNumber, bool elfEars, bool lefEars, bool highLefEars, bool flipX, float zoom, int padding, Dictionary<string, Point> anchorPositions, bool hasChair, bool hasMount, string chairSitAction, int weaponType, Dictionary<AvatarItemEntry, WZProperty> resolved, Dictionary<string, int> exclusiveLocks, List<string> zmap, Dictionary<string, string> smap)
+        private Image<Rgba32> RenderFrame(RenderMode mode, string animationName, string name, int frameNumber, bool elfEars, bool lefEars, bool highLefEars, bool flipX, float zoom, int padding, Dictionary<string, Point> anchorPositions, bool hasChair, bool hasMount, string chairSitAction, int weaponType, Dictionary<AvatarItemEntry, WZProperty> resolved, Dictionary<string, int> exclusiveLocks, List<string> zmap, Dictionary<string, string> smap, bool includeName = true)
         {
             if (animationName == null)
                 animationName = GetPossibleActions(resolved.Keys.ToArray()).Keys.FirstOrDefault(c => c.StartsWith("stand"));
@@ -829,7 +854,7 @@ namespace maplestory.io.Services.Implementations.MapleStory
 
             float NameWidthAdjustmentX = 0;
             Point feetCenter = new Point();
-            Image<Rgba32> res = Transform(mode, flipX, zoom, name, padding, destination, resolved, bodyFrame, minX, minY, maxX, maxY, ref NameWidthAdjustmentX, ref feetCenter);
+            Image<Rgba32> res = Transform(mode, flipX, zoom, name, padding, destination, resolved, bodyFrame, minX, minY, maxX, maxY, ref NameWidthAdjustmentX, ref feetCenter, includeName);
             anchorPositions?.Add("feetCenter", feetCenter);
 
             return res;
@@ -1058,6 +1083,11 @@ namespace maplestory.io.Services.Implementations.MapleStory
             IPath cornerBottomRight = cornerToptLeft.RotateDegree(180).Translate(rightPos, bottomPos);
 
             return new PathCollection(cornerToptLeft, cornerBottomLeft, cornerTopRight, cornerBottomRight);
+        }
+
+        public void Dispose()
+        {
+            pendingDispose.ForEach(c => c.Dispose());
         }
     }
 }

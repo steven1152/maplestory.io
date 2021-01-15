@@ -83,8 +83,8 @@ namespace maplestory.io.Controllers.API
 
         [Route("download")]
         [HttpGet]
-        public IActionResult GetSpritesheet([FromQuery] SpriteSheetFormat format = SpriteSheetFormat.Plain) 
-            => File(AvatarFactory.GetSpriteSheet(Request, format, Character), "application/zip", "CharacterSpriteSheet.zip");
+        public IActionResult GetSpritesheet([FromQuery] SpriteSheetFormat format = SpriteSheetFormat.Plain, string name = null) 
+            => File(AvatarFactory.GetSpriteSheet(Request, format, Character), "application/zip", $"{name ?? "CharacterSpriteSheet"}_{format}.zip");
 
         [Route("{animation?}/{frame?}")]
         [HttpGet]
