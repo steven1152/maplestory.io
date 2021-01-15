@@ -565,6 +565,7 @@ namespace maplestory.io.Services.Implementations.MapleStory
                     {
                         foreach (var animationKey in bag.GroupBy(f => f.Item1.Split("_")[0]))
                         {
+                            WZProperty bodyAnimationNode = body.Value.Resolve(animationKey.Key) ?? body.Value.Resolve("default");
                             List<Tuple<Image<Rgba32>, Dictionary<string, Point>>> frames = new List<Tuple<Image<Rgba32>, Dictionary<string, Point>>>();
                             foreach (var animationFrame in animationKey.OrderBy(f => f.Item1))
                             {
@@ -575,7 +576,8 @@ namespace maplestory.io.Services.Implementations.MapleStory
                             var images = AlignFrames(animationKey.Key.Split('/').Last(), frames.ToArray());
                             for (int i = 0; i < images.Count; i++)
                             {
-                                string name = $"{animationKey.Key}_{i}.png";
+                                int duration = (bodyAnimationNode.ResolveFor<int>($"{i}/delay") ?? 0);
+                                string name = $"{animationKey.Key}_{i}_{duration}.png";
                                 var bytes = images[i].ImageToByte(request, false);
                                 AddEntry(name, bytes);
                             }
